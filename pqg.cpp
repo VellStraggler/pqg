@@ -13,7 +13,8 @@ using namespace std;
 // shapes:
 // diagonal rise, diagonal fall, vertical split, horizontal split
 const uint8_t r = 256 / 2;
-const string photo_number = "36";
+const string photo_number = "38";
+const uint8_t square = 16;
 
 /// range of 0 to 255
 int clampRGB(int a) {
@@ -24,36 +25,10 @@ bool fileExists(const string &filePath) {
 }
 int getArea(int x, int y) {
     // Ensure x and y are within bounds (0-7)
-    if (x < 0 || x > 7 || y < 0 || y > 7) {
+    if (x < 0 || x > square - 1 || y < 0 || y > square - 1) {
         throw out_of_range("Coordinates are out of bounds");
     }
-
-    // Determine the section index based on the provided layout
-    if (y < 3) { // First row (0, 1, 2)
-        if (x < 3) {
-            return 0; // 3x3 section
-        } else if (x < 5) {
-            return 1; // 2x3 section
-        } else {
-            return 2; // 3x3 section
-        }
-    } else if (y < 5) { // Second row (3, 4)
-        if (x < 3) {
-            return 3; // 3x2 section
-        } else if (x < 5) {
-            return 4; // 2x2 section
-        } else {
-            return 5; // 3x2 section
-        }
-    } else { // Third row (5, 6, 7)
-        if (x < 3) {
-            return 6; // 3x3 section
-        } else if (x < 5) {
-            return 7; // 2x3 section
-        } else {
-            return 8; // 3x3 section
-        }
-    }
+    return (y/3)*3 + (x/3);
 }
 
 unsigned int RGBtoInt(tuple<uint8_t, uint8_t, uint8_t> rgb) {
@@ -132,8 +107,8 @@ int main() {
     cout << "Loaded image with width: " << width << ", height: " << height << ", channels: " << bpp << endl;
 
     // create a 2D array that is 8 times smaller than the image resolution
-    const int new_width = width/8;
-    const int new_height = height/8;
+    const int new_width = width/square;
+    const int new_height = height/square;
     int** int_array = new int*[new_width];
     for (int i = 0; i < new_height; ++i) {
         int_array[i] = new int[new_height]; 
@@ -234,11 +209,11 @@ int main() {
 
     // loop through the array one more time in 8x8 segments
     //   count how many of each number appears, then get the two most frequent 
-    for (int global_y = 0; global_y < height-8; global_y+=8) {
-        for (int global_x = 0; global_x < width-8; global_x+=8) {
+    for (int global_y = 0; global_y < height-square; global_y+=square) {
+        for (int global_x = 0; global_x < width-square; global_x+=square) {
             map<int,int> count; 
-            for (int y = 0; y < 8; ++y) {
-                for(int x = 0; x < 8; ++x) {
+            for (int y = 0; y < square; ++y) {
+                for(int x = 0; x < square; ++x) {
                     // Calculate index in rgb_image
                     int index = ((global_y + y) * width + (global_x + x)) * 3;
                     // Get the RGB values of this pixel
@@ -275,10 +250,8 @@ int main() {
             // also collect information on the spread of those colors
             map<int, int> areaAndCount;
 
-            vector<vector<uint8_t>> newShapeColors(8, vector<uint8_t>(3));
-
-            for (int y = 0; y < 8; ++y) {
-                for (int x = 0; x < 8; ++x) {
+            for (int y = 0; y < square; ++y) {
+                for (int x = 0; x < square; ++x) {
                     int area = getArea(x,y);
                     // Calculate index in rgb_image
                     int index = ((global_y + y) * width + (global_x + x)) * 3;
@@ -307,75 +280,188 @@ int main() {
                         color_pick = two_pop[1];
                         areaAndCount[area] -= 1;
                     }
+
                     // assign the new color
-                    uint8_t r, g, b;
-                    vector<uint8_t> new_rgb = IntToRGB(color_pick);
-                    for (int i = 0; i < 3; ++i) {
-                        rgb_image[index + i] = new_rgb[i];
-                    }
+                    // uint8_t r, g, b;
+                    // vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                    // for (int i = 0; i < 3; ++i) {
+                    //     rgb_image[index + i] = new_rgb[i];
+                    // }
                 }
             }
             // Now assign colors based on area counts for the specific shapes
+            bool upper_left_triangle = false;
+            bool bottom_right_triangle = false;
+            bool upper_right_triangle = false;
+            bool bottom_left_triangle = false;
+            bool upper_rectangle = false;
+            bool lower_rectangle = false;
+            bool left_rectangle = false;
+            bool right_rectangle = false;
+
+            // Determine the dominant color based on area counts
+            int dominant_color_index = (areaAndCount[0] > 0 || areaAndCount[1] > 0) ? 0 : 1; // Color 1 or Color 2
+            vector<uint8_t> dominant_rgb = IntToRGB(two_pop[dominant_color_index]);
+            vector<uint8_t> dominant_rgb_2 = IntToRGB(two_pop[1 - dominant_color_index]); // Set dominant color for second color option
+
+
+            // Fill the entire 8x8 grid with the dominant color first
+            for (int y = 0; y < square; ++y) {
+                for (int x = 0; x < square; ++x) {
+                    int index = ((global_y + y) * width + (global_x + x)) * 3;
+                    rgb_image[index] = dominant_rgb[0];
+                    rgb_image[index + 1] = dominant_rgb[1];
+                    rgb_image[index + 2] = dominant_rgb[2];
+                }
+            }
+
             for (auto &pair : areaAndCount) {
                 int area = pair.first;
                 int count = pair.second;
-                int color_pick = (count > 0) ? two_pop[0] : two_pop[1];
+                if (count > 0) { // Positive count for Color 1
+                    if (area == 0) {
+                        upper_left_triangle = true; // Upper-left triangle
+                    } else if (area == 1) {
+                        upper_right_triangle = true; // Upper-right triangle
+                    } else if (area == 2) {
+                        upper_rectangle = true; // Upper rectangle
+                    } else if (area == 6) {
+                        left_rectangle = true; // Left rectangle
+                    }
+                } else { // Negative count for Color 2
+                    if (area == 4) {
+                        bottom_right_triangle = true; // Bottom-right triangle
+                    } else if (area == 5) {
+                        bottom_left_triangle = true; // Bottom-left triangle
+                    } else if (area == 3) {
+                        lower_rectangle = true; // Lower rectangle
+                    } else if (area == 7) {
+                        right_rectangle = true; // Right rectangle
+                    }
+                }
+            }
 
-                // Assign colors based on defined shapes
-                for (int y = 0; y < 8; ++y) {
-                    for (int x = 0; x < 8; ++x) {
+            // Fill the grid with triangles and rectangles, ensuring no overlaps
+            if ((upper_left_triangle && bottom_right_triangle) ||
+                (upper_right_triangle && bottom_left_triangle)) {
+                // Upper-left and bottom-right triangles fill the grid with Color 1
+                for (int y = 0; y < square; ++y) {
+                    for (int x = 0; x < square; ++x) {
                         int index = ((global_y + y) * width + (global_x + x)) * 3;
-                        if (index >= width * height * 3 || global_x + x >= width) {
-                            break;
-                        }
+                        rgb_image[index] = dominant_rgb[0]; // Fill with Color 1
+                        rgb_image[index + 1] = dominant_rgb[1];
+                        rgb_image[index + 2] = dominant_rgb[2];
+                    }
+                }
+            } else if (upper_rectangle) {
+                // Fill the upper rectangle with Color 1
+                upper_left_triangle = false;
+                upper_right_triangle = false;
+                bottom_left_triangle = false;
+                bottom_right_triangle = false;
+                for (int y = 0; y < (square/2); ++y) { // Upper half
+                    for (int x = 0; x < square; ++x) {
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb[0];
+                        rgb_image[index + 1] = dominant_rgb[1];
+                        rgb_image[index + 2] = dominant_rgb[2];
+                    }
+                }
+            } else if (lower_rectangle) {
+                upper_left_triangle = false;
+                upper_right_triangle = false;
+                bottom_left_triangle = false;
+                bottom_right_triangle = false;
+                // Fill the lower rectangle with Color 2
+                vector<uint8_t> dominant_rgb_2 = IntToRGB(two_pop[1]);
+                for (int y = square/2; y < square; ++y) { // Lower half
+                    for (int x = 0; x < square; ++x) {
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb_2[0];
+                        rgb_image[index + 1] = dominant_rgb_2[1];
+                        rgb_image[index + 2] = dominant_rgb_2[2];
+                    }
+                }
+            } else if (left_rectangle) {
+                upper_left_triangle = false;
+                upper_right_triangle = false;
+                bottom_left_triangle = false;
+                bottom_right_triangle = false;
+                // Fill the left rectangle with Color 1
+                for (int y = 0; y < square; ++y) {
+                    for (int x = 0; x < (square/2); ++x) { // Left half
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb[0];
+                        rgb_image[index + 1] = dominant_rgb[1];
+                        rgb_image[index + 2] = dominant_rgb[2];
+                    }
+                }
+            } else if (right_rectangle) {
+                upper_left_triangle = false;
+                upper_right_triangle = false;
+                bottom_left_triangle = false;
+                bottom_right_triangle = false;
+                // Fill the right rectangle with Color 2
+                vector<uint8_t> dominant_rgb_2 = IntToRGB(two_pop[1]);
+                for (int y = 0; y < square; ++y) {
+                    for (int x = (square/2); x < square; ++x) { // Right half
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb_2[0];
+                        rgb_image[index + 1] = dominant_rgb_2[1];
+                        rgb_image[index + 2] = dominant_rgb_2[2];
+                    }
+                }
+            }
 
-                        // Get the RGB values of this pixel
-                        uint8_t rgb_small[3];
-                        for (int i = 0; i < 3; ++i) {
-                            rgb_small[i] = (rgb_image[index + i]);
-                        }
-                        tuple<uint8_t, uint8_t, uint8_t> rgb_tuple = make_tuple(rgb_small[0], rgb_small[1], rgb_small[2]);
-                        int rgb = RGBtoInt(rgb_tuple);
+            // Handle triangles by filling them appropriately
+            if (upper_left_triangle) {
+                upper_right_triangle = false;
+                bottom_left_triangle = false;
+                for (int y = 0; y < square; ++y) {
+                    for (int x = 0; x <= y; ++x) { // Upper-left triangle spanning the entire grid
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb[0];
+                        rgb_image[index + 1] = dominant_rgb[1];
+                        rgb_image[index + 2] = dominant_rgb[2];
+                    }
+                }
+            }
 
-                        // Assign colors based on rectangular areas
-                        if ((area == 0 && y < 3 && x < 3) || (area == 1 && y < 3 && x >= 3 && x < 6)) {
-                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
-                            for (int i = 0; i < 3; ++i) {
-                                rgb_image[index + i] = new_rgb[i];
-                            }
-                        }
+            if (bottom_right_triangle) {
+                upper_right_triangle = false;
+                bottom_left_triangle = false;
+                for (int y = 0; y < square; ++y) {
+                    for (int x = 0; x <= (square - 1) - (y); ++x) { // Bottom-right triangle spanning the entire grid
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb_2[0];
+                        rgb_image[index + 1] = dominant_rgb_2[1];
+                        rgb_image[index + 2] = dominant_rgb_2[2];
+                    }
+                }
+            }
 
-                        // Crisp Top-Left Triangle
-                        if (y < 4 && x < 4 && (x + y < 4)) {
-                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
-                            for (int i = 0; i < 3; ++i) {
-                                rgb_image[index + i] = new_rgb[i];
-                            }
-                        }
+            if (upper_right_triangle) {
+                upper_left_triangle = false;
+                bottom_right_triangle = false;
+                for (int y = 0; y < square; ++y) {
+                    for (int x = (square - 1); x >= (square - 1) - y; --x) { // Upper-right triangle spanning the entire grid
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb[0];
+                        rgb_image[index + 1] = dominant_rgb[1];
+                        rgb_image[index + 2] = dominant_rgb[2];
+                    }
+                }
+            }
 
-                        // Crisp Bottom-Left Triangle
-                        if (y >= 4 && x < 4 && (x + (8 - y) < 4)) {
-                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
-                            for (int i = 0; i < 3; ++i) {
-                                rgb_image[index + i] = new_rgb[i];
-                            }
-                        }
-
-                        // Crisp Top-Right Triangle
-                        if (y < 4 && x >= 4 && ((8 - x) + y < 4)) {
-                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
-                            for (int i = 0; i < 3; ++i) {
-                                rgb_image[index + i] = new_rgb[i];
-                            }
-                        }
-
-                        // Crisp Bottom-Right Triangle
-                        if (y >= 4 && x >= 4 && ((8 - x) + (8 - y) < 4)) {
-                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
-                            for (int i = 0; i < 3; ++i) {
-                                rgb_image[index + i] = new_rgb[i];
-                            }
-                        }
+            if (bottom_left_triangle) {
+                upper_left_triangle = false;
+                bottom_right_triangle = false;
+                for (int y = 0; y < square; ++y) {
+                    for (int x = 0; x <= y; ++x) { // Bottom-left triangle spanning the entire grid
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        rgb_image[index] = dominant_rgb_2[0];
+                        rgb_image[index + 1] = dominant_rgb_2[1];
+                        rgb_image[index + 2] = dominant_rgb_2[2];
                     }
                 }
             }
