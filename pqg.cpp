@@ -7,43 +7,97 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 #include <bitset>
-#include <unordered_map>
 #include <map>
 
 using namespace std;
 // shapes:
 // diagonal rise, diagonal fall, vertical split, horizontal split
 const uint8_t r = 256 / 2;
-const string photo_number = "30";
+const string photo_number = "36";
 
+/// range of 0 to 255
+int clampRGB(int a) {
+    return max(min(a,255),0);
+}
 bool fileExists(const string &filePath) {
     return (_access(filePath.c_str(), 0) != -1);
 }
-unsigned int RGBtoInt(uint8_t rgb[3]) {
-    return (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
-}
-tuple<uint8_t, uint8_t, uint8_t> IntToRGB(int color) {
-    uint8_t r = (color >> 16) & 0xFF;
-    uint8_t g = (color >> 8) & 0xFF;
-    uint8_t b = color & 0xFF;
-    return make_tuple(r,g,b);
-}
-float RGBtoSatAndVal(uint8_t r, uint8_t g, uint8_t b) {
-    float r_norm = r / 255.0f;
-    float g_norm = g / 255.0f;
-    float b_norm = b / 255.0f;
+int getArea(int x, int y) {
+    // Ensure x and y are within bounds (0-7)
+    if (x < 0 || x > 7 || y < 0 || y > 7) {
+        throw out_of_range("Coordinates are out of bounds");
+    }
 
-    float max_val = max(r_norm, max(g_norm, b_norm));
-    float min_val = min(r_norm, min(g_norm, b_norm));
+    // Determine the section index based on the provided layout
+    if (y < 3) { // First row (0, 1, 2)
+        if (x < 3) {
+            return 0; // 3x3 section
+        } else if (x < 5) {
+            return 1; // 2x3 section
+        } else {
+            return 2; // 3x3 section
+        }
+    } else if (y < 5) { // Second row (3, 4)
+        if (x < 3) {
+            return 3; // 3x2 section
+        } else if (x < 5) {
+            return 4; // 2x2 section
+        } else {
+            return 5; // 3x2 section
+        }
+    } else { // Third row (5, 6, 7)
+        if (x < 3) {
+            return 6; // 3x3 section
+        } else if (x < 5) {
+            return 7; // 2x3 section
+        } else {
+            return 8; // 3x3 section
+        }
+    }
+}
+
+unsigned int RGBtoInt(tuple<uint8_t, uint8_t, uint8_t> rgb) {
+    uint8_t r = get<0>(rgb);
+    uint8_t g = get<1>(rgb);
+    uint8_t b = get<2>(rgb);
+    return (r << 16) | (g << 8) | b;
+}
+vector<uint8_t> IntToRGB(int color) {
+    bitset<24> bits(color);
+    uint8_t r = (bits >> 16).to_ulong() & 0xFF;
+    uint8_t g = (bits >> 8).to_ulong() & 0xFF;
+    uint8_t b = bits.to_ulong() & 0xFF;
+    return {r,g,b};
+}
+float RGBspread(uint8_t r, uint8_t g, uint8_t b) {
+    float max_val = max(r, max(g, b));
+    float min_val = min(r, min(g, b));
     float delta = max_val - min_val;
 
-    float value = max_val;
-    float saturation;
+    float spread = static_cast<float>(max_val - min_val) / 255.0f;
 
-    if (max_val == 0) saturation = 0.1;
-    else saturation = delta / max_val;
+    return (1- spread) * (1- spread);
+}
+// Function to increase saturation without converting to HSV
+tuple<uint8_t, uint8_t, uint8_t> increaseSaturation(vector<uint8_t> rgb, float factor = 1) {
+    uint8_t r = rgb[0];
+    uint8_t g = rgb[1];
+    uint8_t b = rgb[2];
 
-    return 1 + ((saturation + value));
+    // Calculate the average (gray component)
+    int avg = (r + g + b) / 3;
+
+    // Amplify each component by pushing it away from the average
+    int new_r = static_cast<int>(avg + (r - avg) * factor);
+    int new_g = static_cast<int>(avg + (g - avg) * factor);
+    int new_b = static_cast<int>(avg + (b - avg) * factor);
+
+    // Clamp values to the 0–255 range
+    new_r = clampRGB(new_r);
+    new_g = clampRGB(new_g);
+    new_b = clampRGB(new_b);
+
+    return {static_cast<uint8_t>(new_r), static_cast<uint8_t>(new_g), static_cast<uint8_t>(new_b)};
 }
 
 
@@ -96,9 +150,10 @@ int main() {
             // Get the RGB values of this pixel
             uint8_t rgb_small[3];
             for (int i = 0; i < 3; ++i) {
-                rgb_small[i] = (rgb_image[index + i] / 16) * 16; // rounding 
+                rgb_small[i] = (rgb_image[index + i]);
             }
-            int rgb = RGBtoInt(rgb_small);
+            tuple<uint8_t, uint8_t, uint8_t> rgb_tuple = make_tuple(rgb_small[0],rgb_small[1],rgb_small[2]);
+            int rgb = RGBtoInt(rgb_tuple);
             // count up each rgb number
             auto it = rgbCount.find(rgb);
             if (it == rgbCount.end()) { // create new key
@@ -108,35 +163,40 @@ int main() {
             }
         }
     }
+    // Get the total so we can find 8ths
+    long total = 0;
+    for (const auto &pair : rgbCount) {
+        total += pair.second;
+    }
+    long portion = total / 8;
     // Find the top colors
     int top_keys[8];
     for (int i = 0; i < 8; ++i) {
         int max = 0;
         int max_key = 0;
+        long local_median = (portion / 2) + (portion * i);
+        int j = 0;
+        long running_total = 0;
         for (const auto &pair : rgbCount) {
-            uint8_t r, g, b;
-            tie(r, g, b) = IntToRGB(max_key);
-            float saturation = RGBtoSatAndVal(r, g, b);
-            cout << saturation << endl;
-            int weighted_count = static_cast<int>(pair.second * saturation);
-            if (weighted_count > max) {
-                max = pair.second;
+            running_total += pair.second;
+            if (running_total >= local_median) {
                 max_key = pair.first;
+                uint8_t r, g, b;
+                vector<uint8_t> rgb;
+                rgb = IntToRGB(max_key);
+                r = rgb[0];
+                g = rgb[1];
+                b = rgb[2];
+                cout << rgb[0] << endl;
+                cout << static_cast<int>(r) <<","<< static_cast<int>(g) <<","<< static_cast<int>(b) << endl;
+                auto saturatedRGB = increaseSaturation(rgb);
+                max_key = RGBtoInt(saturatedRGB);
+                break;
             }
+            j++;
         }
-        rgbCount.erase(max_key); // don't want to pick it 8 times
         cout<<max_key<<endl;
-        for (int j = max_key - 1500000; j < max_key + 1500000; ++j) {
-            rgbCount.erase(j);
-        }
         top_keys[i] = max_key;
-        // uint8_t rgb_old[3] = {r,g,b};
-        // int rgb_check = RGBtoInt(rgb_old);
-        // cout << "key: " << max_key << 
-        //     ", RGB: " << static_cast<int>(r)  
-        //     <<","<<static_cast<int>(g) 
-        //     <<","<<static_cast<int>(b) <<
-        //     ", oldRGB: " << rgb_check <<endl;
     }
     // round each pixel to one of the 8 provided colors
     for (int y = 0; y < height; ++y) {
@@ -146,12 +206,13 @@ int main() {
             // Get the RGB values of this pixel
             uint8_t rgb_small[3];
             for (int i = 0; i < 3; ++i) {
-                rgb_small[i] = (rgb_image[index + i] / 8) * 8; // rounding 
+                rgb_small[i] = (rgb_image[index + i]);
             }
-            int rgb = RGBtoInt(rgb_small);
+            tuple<uint8_t, uint8_t, uint8_t> rgb_tuple = make_tuple(rgb_small[0],rgb_small[1],rgb_small[2]);
+            int rgb = RGBtoInt(rgb_tuple);
 
             // find which of the colors is closest
-            int min_dist = 1000000;
+            int min_dist = top_keys[7];
             int color_pick = 0;
             for (int i = 0; i < 8; ++i) {
                 if (abs(rgb - top_keys[i]) < min_dist) {
@@ -161,8 +222,10 @@ int main() {
             }
             // assign the new color
             uint8_t r, g, b;
-            tie(r, g, b) = IntToRGB(top_keys[color_pick]);
-            uint8_t new_rgb[3] = {r,g,b};
+            vector<uint8_t> new_rgb = IntToRGB(top_keys[color_pick]);
+            r = new_rgb[0];
+            g = new_rgb[1];
+            b = new_rgb[2];
             for (int i = 0; i < 3; ++i) {
                 rgb_image[index + i] = new_rgb[i];
             }
@@ -171,7 +234,154 @@ int main() {
 
     // loop through the array one more time in 8x8 segments
     //   count how many of each number appears, then get the two most frequent 
-    
+    for (int global_y = 0; global_y < height-8; global_y+=8) {
+        for (int global_x = 0; global_x < width-8; global_x+=8) {
+            map<int,int> count; 
+            for (int y = 0; y < 8; ++y) {
+                for(int x = 0; x < 8; ++x) {
+                    // Calculate index in rgb_image
+                    int index = ((global_y + y) * width + (global_x + x)) * 3;
+                    // Get the RGB values of this pixel
+                    uint8_t rgb_small[3];
+                    for (int i = 0; i < 3; ++i) {
+                        rgb_small[i] = (rgb_image[index + i]);
+                    }
+                    tuple<uint8_t, uint8_t, uint8_t> rgb_tuple = make_tuple(rgb_small[0],rgb_small[1],rgb_small[2]);
+                    int rgb = RGBtoInt(rgb_tuple);
+                    // count up each rgb number
+                    auto it = count.find(rgb);
+                    if (it == count.end()) { // create new key
+                        count[rgb] = 1;
+                    } else {
+                        count[rgb] = count[rgb] + 1;
+                    }
+                }
+            }
+            // find the 2 most common colors
+            int two_pop[2] = {0,0};
+            for (int i = 0; i < 2; ++i) {
+                int max = 0;
+                int choice = 0;
+                for (const auto &pair : count) {
+                    if (pair.second > max) {
+                        max = pair.second;
+                        choice = pair.first;
+                    }
+                }
+                count.erase(choice);
+                two_pop[i] = choice;
+            }
+            // round each pixel to one of the 2 provided colors
+            // also collect information on the spread of those colors
+            map<int, int> areaAndCount;
+
+            vector<vector<uint8_t>> newShapeColors(8, vector<uint8_t>(3));
+
+            for (int y = 0; y < 8; ++y) {
+                for (int x = 0; x < 8; ++x) {
+                    int area = getArea(x,y);
+                    // Calculate index in rgb_image
+                    int index = ((global_y + y) * width + (global_x + x)) * 3;
+                    if (index >= width * height * 3 || global_x + x >= width) {
+                        break;
+                    }
+                    // Get the RGB values of this pixel
+                    uint8_t rgb_small[3];
+                    for (int i = 0; i < 3; ++i) {
+                        rgb_small[i] = (rgb_image[index + i]);
+                    }
+                    tuple<uint8_t, uint8_t, uint8_t> rgb_tuple = make_tuple(rgb_small[0],rgb_small[1],rgb_small[2]);
+                    int rgb = RGBtoInt(rgb_tuple);
+
+                    auto it = areaAndCount.find(area);
+                    if (it == areaAndCount.end()) { // create new key as needed
+                        areaAndCount[area] = 0;
+                    }
+
+                    // find which of the colors is closest
+                    int color_pick;
+                    if (abs(rgb - two_pop[0]) < abs(rgb - two_pop[1])) {
+                        color_pick = two_pop[0];
+                        areaAndCount[area] += 1;
+                    } else {
+                        color_pick = two_pop[1];
+                        areaAndCount[area] -= 1;
+                    }
+                    // assign the new color
+                    uint8_t r, g, b;
+                    vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                    for (int i = 0; i < 3; ++i) {
+                        rgb_image[index + i] = new_rgb[i];
+                    }
+                }
+            }
+            // Now assign colors based on area counts for the specific shapes
+            for (auto &pair : areaAndCount) {
+                int area = pair.first;
+                int count = pair.second;
+                int color_pick = (count > 0) ? two_pop[0] : two_pop[1];
+
+                // Assign colors based on defined shapes
+                for (int y = 0; y < 8; ++y) {
+                    for (int x = 0; x < 8; ++x) {
+                        int index = ((global_y + y) * width + (global_x + x)) * 3;
+                        if (index >= width * height * 3 || global_x + x >= width) {
+                            break;
+                        }
+
+                        // Get the RGB values of this pixel
+                        uint8_t rgb_small[3];
+                        for (int i = 0; i < 3; ++i) {
+                            rgb_small[i] = (rgb_image[index + i]);
+                        }
+                        tuple<uint8_t, uint8_t, uint8_t> rgb_tuple = make_tuple(rgb_small[0], rgb_small[1], rgb_small[2]);
+                        int rgb = RGBtoInt(rgb_tuple);
+
+                        // Assign colors based on rectangular areas
+                        if ((area == 0 && y < 3 && x < 3) || (area == 1 && y < 3 && x >= 3 && x < 6)) {
+                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                            for (int i = 0; i < 3; ++i) {
+                                rgb_image[index + i] = new_rgb[i];
+                            }
+                        }
+
+                        // Crisp Top-Left Triangle
+                        if (y < 4 && x < 4 && (x + y < 4)) {
+                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                            for (int i = 0; i < 3; ++i) {
+                                rgb_image[index + i] = new_rgb[i];
+                            }
+                        }
+
+                        // Crisp Bottom-Left Triangle
+                        if (y >= 4 && x < 4 && (x + (8 - y) < 4)) {
+                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                            for (int i = 0; i < 3; ++i) {
+                                rgb_image[index + i] = new_rgb[i];
+                            }
+                        }
+
+                        // Crisp Top-Right Triangle
+                        if (y < 4 && x >= 4 && ((8 - x) + y < 4)) {
+                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                            for (int i = 0; i < 3; ++i) {
+                                rgb_image[index + i] = new_rgb[i];
+                            }
+                        }
+
+                        // Crisp Bottom-Right Triangle
+                        if (y >= 4 && x >= 4 && ((8 - x) + (8 - y) < 4)) {
+                            vector<uint8_t> new_rgb = IntToRGB(color_pick);
+                            for (int i = 0; i < 3; ++i) {
+                                rgb_image[index + i] = new_rgb[i];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Save the processed image
     string output_file_name = "output/" + photo_number + file_name;
     if (stbi_write_png(output_file_name.c_str(), width, height, 3, rgb_image, width*3)) {

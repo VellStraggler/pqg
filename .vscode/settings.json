@@ -7,6 +7,10 @@
         "tuple": "cpp",
         "unordered_map": "cpp",
         "bitset": "cpp",
-        "xtree": "cpp"
+        "xtree": "cpp",
+        "algorithm": "cpp",
+        "vector": "cpp",
+        "map": "cpp",
+        "stdexcept": "cpp"
     }
 }
