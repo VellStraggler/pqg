@@ -1,18 +1,51 @@
 #include <iostream>
 #include <string>
+#include <vector>
 #include <io.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
+#include <bitset>
+#include <unordered_map>
+#include <map>
 
 using namespace std;
 // shapes:
 // diagonal rise, diagonal fall, vertical split, horizontal split
+const uint8_t r = 256 / 2;
+const string photo_number = "30";
 
 bool fileExists(const string &filePath) {
     return (_access(filePath.c_str(), 0) != -1);
 }
+unsigned int RGBtoInt(uint8_t rgb[3]) {
+    return (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+}
+tuple<uint8_t, uint8_t, uint8_t> IntToRGB(int color) {
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+    return make_tuple(r,g,b);
+}
+float RGBtoSatAndVal(uint8_t r, uint8_t g, uint8_t b) {
+    float r_norm = r / 255.0f;
+    float g_norm = g / 255.0f;
+    float b_norm = b / 255.0f;
+
+    float max_val = max(r_norm, max(g_norm, b_norm));
+    float min_val = min(r_norm, min(g_norm, b_norm));
+    float delta = max_val - min_val;
+
+    float value = max_val;
+    float saturation;
+
+    if (max_val == 0) saturation = 0.1;
+    else saturation = delta / max_val;
+
+    return 1 + ((saturation + value));
+}
+
 
 int main() {
     // Pick from reading a text file or converting an image file
@@ -53,69 +86,94 @@ int main() {
     }
 
 
-    // loop through the whole array once to get 8 average colors (using 6 color values):
-
-    // Store the average red, blue, and green values, and the min and max values
-    long rgb_sums[3] = {0,0,0};
-    uint8_t rgb_mins[3] = {255,255,255};
-    uint8_t rgb_maxes[3] = {0,0,0};
-
+    // loop through the whole array once to get the 8 most common colors:
+    map<int, int> rgbCount;
+    // get the sum total, then go up to half the sum, then half of that
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             // Calculate index in rgb_image
             int index = (y * width + x) * 3;
-            // Get the RGB values
+            // Get the RGB values of this pixel
+            uint8_t rgb_small[3];
             for (int i = 0; i < 3; ++i) {
-                uint8_t v = rgb_image[index + i];
-                // add to a sum for an eventual average
-                rgb_sums[i] += v;
-                // get the min
-                if (v < rgb_mins[i]) {
-                    rgb_mins[i] = v;
-                }
-                // get the max
-                if (v > rgb_maxes[i]) {
-                    rgb_maxes[i] = v;
-                }
+                rgb_small[i] = (rgb_image[index + i] / 16) * 16; // rounding 
+            }
+            int rgb = RGBtoInt(rgb_small);
+            // count up each rgb number
+            auto it = rgbCount.find(rgb);
+            if (it == rgbCount.end()) { // create new key
+                rgbCount[rgb] = 1;
+            } else {
+                rgbCount[rgb] = rgbCount[rgb] + 1;
             }
         }
     }
-    // Get the median value of min and avg and of the max and the avg, these are the two numbers we'll use
-    for (int i = 0; i < 3; ++i) {
-        // compute the average
-        rgb_sums[i] /= (width * height);
-        cout << "RGB: " << i << ", average: " << rgb_sums[i] << ", min: " << static_cast<int>(rgb_mins[i]) << ", max: " << static_cast<int>(rgb_maxes[i]) << endl;
-        rgb_mins[i] = (rgb_mins[i] + rgb_sums[i]) / 2;
-        rgb_maxes[i]= (rgb_maxes[i]+ rgb_sums[i]) / 2;
-        cout << "RGB: " << i << ", average: " << rgb_sums[i] << ", min: " << static_cast<int>(rgb_mins[i]) << ", max: " << static_cast<int>(rgb_maxes[i]) << endl;
-        
+    // Find the top colors
+    int top_keys[8];
+    for (int i = 0; i < 8; ++i) {
+        int max = 0;
+        int max_key = 0;
+        for (const auto &pair : rgbCount) {
+            uint8_t r, g, b;
+            tie(r, g, b) = IntToRGB(max_key);
+            float saturation = RGBtoSatAndVal(r, g, b);
+            cout << saturation << endl;
+            int weighted_count = static_cast<int>(pair.second * saturation);
+            if (weighted_count > max) {
+                max = pair.second;
+                max_key = pair.first;
+            }
+        }
+        rgbCount.erase(max_key); // don't want to pick it 8 times
+        cout<<max_key<<endl;
+        for (int j = max_key - 1500000; j < max_key + 1500000; ++j) {
+            rgbCount.erase(j);
+        }
+        top_keys[i] = max_key;
+        // uint8_t rgb_old[3] = {r,g,b};
+        // int rgb_check = RGBtoInt(rgb_old);
+        // cout << "key: " << max_key << 
+        //     ", RGB: " << static_cast<int>(r)  
+        //     <<","<<static_cast<int>(g) 
+        //     <<","<<static_cast<int>(b) <<
+        //     ", oldRGB: " << rgb_check <<endl;
     }
-    // loop through the array again to apply the the closest colors using the numbers stored
+    // round each pixel to one of the 8 provided colors
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
+            // Calculate index in rgb_image
             int index = (y * width + x) * 3;
+            // Get the RGB values of this pixel
+            uint8_t rgb_small[3];
             for (int i = 0; i < 3; ++i) {
-                uint8_t v = rgb_image[index + i];
-                // static cast because uint8_t is unsigned (cannot hold negative value)
-                uint8_t dist_to_min = abs(static_cast<int>(rgb_mins[i]) - static_cast<int>(v));
-                uint8_t dist_to_max = abs(static_cast<int>(rgb_maxes[i])- static_cast<int>(v));
-                uint8_t dist_to_avg = abs(static_cast<int>(rgb_sums[i])- static_cast<int>(v));
-                dist_to_max = abs(255- static_cast<int>(v));
-                dist_to_avg = abs(0- static_cast<int>(v));
-                // use whichever one is closest and "round" to that number
-                if (dist_to_max < dist_to_min) {
-                    rgb_image[index + i] = rgb_maxes[i];
-                } else {//if (dist_to_min < dist_to_max) {
-                    rgb_image[index + i] = rgb_mins[i];
+                rgb_small[i] = (rgb_image[index + i] / 8) * 8; // rounding 
+            }
+            int rgb = RGBtoInt(rgb_small);
+
+            // find which of the colors is closest
+            int min_dist = 1000000;
+            int color_pick = 0;
+            for (int i = 0; i < 8; ++i) {
+                if (abs(rgb - top_keys[i]) < min_dist) {
+                    min_dist = abs(rgb - top_keys[i]);
+                    color_pick = i;
                 }
+            }
+            // assign the new color
+            uint8_t r, g, b;
+            tie(r, g, b) = IntToRGB(top_keys[color_pick]);
+            uint8_t new_rgb[3] = {r,g,b};
+            for (int i = 0; i < 3; ++i) {
+                rgb_image[index + i] = new_rgb[i];
             }
         }
     }
+
     // loop through the array one more time in 8x8 segments
     //   count how many of each number appears, then get the two most frequent 
     
     // Save the processed image
-    string output_file_name = "output/4" + file_name;
+    string output_file_name = "output/" + photo_number + file_name;
     if (stbi_write_png(output_file_name.c_str(), width, height, 3, rgb_image, width*3)) {
         cout << "Image saved successfully as " << output_file_name << endl;
     } else {
@@ -130,5 +188,6 @@ int main() {
 
     // READ TEXT FILE
     // file format: half-min,half-max(for R G and B),width,height,0,4,2,7,9... 
+    // if we go off multiples of 16 instead, we can store smaller numbers to represent RGB values while increasing color options
     return 0;
 }
